@@ -7,7 +7,7 @@ function isEncryptedVaultEnvelope(value) {
   const allowedFields = new Set([
     'version', 'algorithm', 'kdf', 'iterations', 'salt',
     'passwordNormalization', 'secretCanonicalization', 'secretEncoding',
-    'iv', 'data', 'updatedAt',
+    'iv', 'data', 'updatedAt', 'keyrings', 'keyrings', 'keyrings', 'keyrings',
   ]);
   if (Object.keys(value).some((key) => !allowedFields.has(key))) return false;
   if (typeof value.salt !== 'string' || value.salt.length < 8 || value.salt.length > 512) return false;

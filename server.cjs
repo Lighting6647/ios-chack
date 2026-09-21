@@ -23,6 +23,7 @@ const {
   createVaultStore,
 } = require('./vault-sync-store.cjs');
 const { createRequestStore } = require('./request-store.cjs');
+const { createUserStore } = require('./user-store.cjs');
 
 const root = __dirname;
 const port = process.env.PORT || 3030;
@@ -56,6 +57,7 @@ const maxShareExpiryMs = 30 * 24 * 60 * 60 * 1000;
 const authAttempts = new Map();
 const vaultStore = createVaultStore();
 const requestStore = createRequestStore();
+const userStore = createUserStore();
 const types = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -147,7 +149,8 @@ function requireAdminSession(req, res) {
     }));
     return false;
   }
-  if (!isAdminAuthenticated(req)) {
+  req.userEmail = isAdminAuthenticated(req);
+  if (!req.userEmail) {
     send(res, 401, JSON.stringify({
       ok: false,
       error: 'กรุณาเข้าสู่ระบบ Passly อีกครั้ง',

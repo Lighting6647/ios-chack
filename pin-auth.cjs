@@ -115,6 +115,8 @@ function createSessionToken(pinHash, options = {}) {
     v: 1,
     exp: now + ttlMs,
     nonce: crypto.randomBytes(16).toString('base64url'),
+    email: options.email,
+    email: options.email,
   })).toString('base64url');
   const signature = crypto
     .createHmac('sha256', sessionSigningKey(pinHash))
@@ -125,7 +127,7 @@ function createSessionToken(pinHash, options = {}) {
 
 function verifySessionToken(token, pinHash, now = Date.now()) {
   const [payload, signature, ...extra] = String(token || '').split('.');
-  if (!payload || !signature || extra.length) return false;
+  if (!payload || !signature || extra.length) return null;
   const expected = crypto
     .createHmac('sha256', sessionSigningKey(pinHash))
     .update(payload)
@@ -134,17 +136,20 @@ function verifySessionToken(token, pinHash, now = Date.now()) {
   try {
     actual = Buffer.from(signature, 'base64url');
   } catch {
-    return false;
+    return null;
   }
-  if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) return false;
+  if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) return null;
   try {
     const parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
-    return parsed.v === 1
+    if (parsed.v === 1
       && Number.isFinite(parsed.exp)
       && parsed.exp > now
-      && parsed.exp <= now + SESSION_TTL_MS;
+      && parsed.exp <= now + SESSION_TTL_MS) {
+      return parsed;
+    }
+    return null;
   } catch {
-    return false;
+    return null;
   }
 }
 

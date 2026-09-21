@@ -2,7 +2,7 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 export const VAULT_STORAGE_KEY = "passly-encrypted-vault-v1";
-export const VAULT_VERSION = 1;
+export const VAULT_VERSION = 3;
 export const KDF_ITERATIONS = 600_000;
 export const SHARE_KDF_ITERATIONS = 250_000;
 export const MAX_SHARE_EXPIRY_MS = 30 * 24 * 60 * 60 * 1000;
@@ -101,6 +101,32 @@ export async function deriveVaultKey(
     false,
     ["encrypt", "decrypt"],
   );
+}
+
+
+export async function addKeyring(masterKey, email, password) {
+  const salt = randomBytes(16);
+  const iv = randomBytes(12);
+  const userKey = await deriveVaultKey(
+    normalizeVaultSecret(password),
+    salt,
+    KDF_ITERATIONS,
+    VAULT_SECRET_ENCODING
+  );
+  const rawMasterKey = await crypto.subtle.exportKey("raw", masterKey);
+  const encryptedKey = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, userKey, rawMasterKey);
+  return {
+    email: email.toLowerCase().trim(),
+    kdf: "PBKDF2-SHA256",
+    iterations: KDF_ITERATIONS,
+    salt: bytesToBase64(salt),
+    passwordNormalization: MASTER_PASSWORD_NORMALIZATION,
+    secretCanonicalization: VAULT_SECRET_CANONICALIZATION,
+    secretEncoding: VAULT_SECRET_ENCODING,
+    keyrings: envelope.keyrings || [],
+    iv: bytesToBase64(iv),
+    encryptedKey: bytesToBase64(new Uint8Array(encryptedKey))
+  };
 }
 
 export async function encryptVault(vault, key, envelope = {}) {

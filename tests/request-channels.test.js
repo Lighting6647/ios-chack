@@ -49,27 +49,27 @@ function collectPostbackActions(value, result = []) {
   return result;
 }
 
-test("delivery menu offers LINE by default without Lark", async () => {
+test("delivery menu offers Lark by default", async () => {
   const html = await fs.readFile(path.join(projectRoot, "index.html"), "utf8");
   const app = await fs.readFile(path.join(projectRoot, "app.js"), "utf8");
 
   assert.match(html, /name="channel" id="deliveryChannel"/);
-  assert.match(html, /option value="line" selected>ส่งเข้า LINE/);
+  assert.match(html, /option value="lark" selected>ส่งเข้า Lark/);
   assert.match(html, /option value="copy">คัดลอกข้อความ/);
-  assert.doesNotMatch(html, /ส่งลิงก์เข้า Lark/);
-  assert.match(app, /channel === "line"/);
-  assert.match(app, /sendLineDelivery/);
+  assert.match(html, /Lark Request & Delivery/);
+  assert.match(app, /channel === "lark"/);
+  assert.match(app, /sendLarkDelivery/);
   assert.match(html, /id="lineReconnectBtn"/);
   assert.match(app, /เซสชัน Server หมดอายุ · กดเชื่อมต่อใหม่/);
   assert.match(app, /authenticateServerPin\(pin\)/);
-  assert.match(await fs.readFile(path.join(projectRoot, "server.cjs"), "utf8"), /type: 'flex'/);
+  assert.match(await fs.readFile(path.join(projectRoot, "server.cjs"), "utf8"), /larkRequestMenu/);
   assert.match(html, /id="deliveryExpiry"/);
   assert.match(html, /option value="custom">กำหนดวันและเวลาเอง/);
   assert.match(html, /name="customExpiryAt"/);
   assert.match(app, /resolveShareExpiry/);
 });
 
-test("LINE password requests and secure delivery work end to end", async (context) => {
+test("legacy LINE request endpoints remain compatible", async (context) => {
   const port = await getFreePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "passly-line-test-"));
@@ -113,8 +113,8 @@ test("LINE password requests and secure delivery work end to end", async (contex
 
   const healthResponse = await waitForServer(`${baseUrl}/api/health`, child);
   const health = await healthResponse.json();
-  assert.equal(health.requestChannel, "LINE");
-  assert.equal(health.deliveryChannel, "LINE");
+  assert.equal(health.requestChannel, "Lark");
+  assert.equal(health.deliveryChannel, "Lark");
   assert.equal(health.larkInboundEnabled, true);
   assert.equal(health.adminPinConfigured, true);
 
@@ -384,4 +384,190 @@ test("LINE password requests and secure delivery work end to end", async (contex
   }).then((response) => response.json());
   assert.equal(deliveredList.requests[0].status, "delivered");
   assert.equal(deliveredList.requests[0].deliveryMethod, "line-secure-share");
+});
+
+test("Lark interactive menu requests and secure delivery work end to end", async (context) => {
+  const port = await getFreePort();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  const dataDir = await fs.mkdtemp(path.join(os.tmpdir(), "passly-lark-test-"));
+  const adminPin = "lark-request-test-pin";
+  const adminPinHash = await createPinHash(adminPin);
+  const larkCalls = [];
+  const larkApi = http.createServer(async (req, res) => {
+    let raw = "";
+    for await (const chunk of req) raw += chunk;
+    larkCalls.push({ method: req.method, url: req.url, body: raw ? JSON.parse(raw) : null });
+    res.writeHead(200, { "content-type": "application/json" });
+    if (req.url === "/open-apis/auth/v3/tenant_access_token/internal") {
+      res.end(JSON.stringify({ code: 0, tenant_access_token: "test-lark-token", expire: 7200 }));
+      return;
+    }
+    res.end(JSON.stringify({ code: 0, data: {} }));
+  });
+  larkApi.listen(0, "127.0.0.1");
+  await once(larkApi, "listening");
+  const larkApiUrl = `http://127.0.0.1:${larkApi.address().port}`;
+  const child = spawn(process.execPath, ["server.cjs"], {
+    cwd: projectRoot,
+    env: {
+      ...process.env,
+      NODE_ENV: "production",
+      PORT: String(port),
+      DATA_DIR: dataDir,
+      PASSLY_ADMIN_PIN_HASH: adminPinHash,
+      LARK_APP_ID: "cli_test_app",
+      LARK_APP_SECRET: "test-secret",
+      LARK_VERIFICATION_TOKEN: "test-verification-token",
+      LARK_ALLOWED_CHAT_ID: "oc_test_chat",
+      LARK_API_BASE_URL: larkApiUrl,
+    },
+    stdio: "ignore",
+  });
+
+  context.after(async () => {
+    if (child.exitCode === null) {
+      child.kill();
+      await once(child, "exit");
+    }
+    larkApi.close();
+    await once(larkApi, "close");
+    await fs.rm(dataDir, { recursive: true, force: true });
+  });
+
+  const health = await (await waitForServer(`${baseUrl}/api/health`, child)).json();
+  assert.equal(health.requestChannel, "Lark");
+  assert.equal(health.deliveryChannel, "Lark");
+  assert.equal(health.larkConfigured, true);
+  assert.equal(health.larkAppConfigured, true);
+  assert.equal(health.larkVerificationConfigured, true);
+
+  const invalidEvent = await fetch(`${baseUrl}/api/lark/webhook`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ type: "url_verification", token: "wrong", challenge: "nope" }),
+  });
+  assert.equal(invalidEvent.status, 401);
+
+  const verification = await fetch(`${baseUrl}/api/lark/webhook`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ type: "url_verification", token: "test-verification-token", challenge: "verified" }),
+  });
+  assert.equal(verification.status, 200);
+  assert.deepEqual(await verification.json(), { challenge: "verified" });
+
+  const authResponse = await fetch(`${baseUrl}/api/auth/pin`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ pin: adminPin }),
+  });
+  const adminCookie = authResponse.headers.get("set-cookie").split(";")[0];
+  const catalogItems = [
+    { id: "vault-google-main", system: "Google Workspace", account: "บัญชีหลัก", password: "do-not-store" },
+    { id: "vault-google-ads", system: "Google Workspace", account: "บัญชีโฆษณา", password: "do-not-store" },
+    { id: "vault-github", system: "GitHub", account: "IT", password: "do-not-store" },
+  ];
+  const catalogResponse = await fetch(`${baseUrl}/api/lark/catalog`, {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie: adminCookie },
+    body: JSON.stringify({ items: catalogItems }),
+  });
+  assert.equal(catalogResponse.status, 200);
+  assert.equal((await catalogResponse.json()).count, 3);
+  assert.doesNotMatch(await fs.readFile(path.join(dataDir, "config.json"), "utf8"), /do-not-store/);
+
+  const menuEvent = {
+    header: { event_id: "lark-menu-1", event_type: "im.message.receive_v1", token: "test-verification-token" },
+    event: {
+      sender: { sender_id: { open_id: "ou_test_user" } },
+      message: {
+        message_id: "om_menu_message",
+        message_type: "text",
+        chat_id: "oc_test_chat",
+        content: JSON.stringify({ text: "เมนู" }),
+      },
+    },
+  };
+  const menuResponse = await fetch(`${baseUrl}/api/lark/webhook`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(menuEvent),
+  });
+  assert.equal(menuResponse.status, 200);
+  assert.equal((await menuResponse.json()).menu, true);
+  const menuReply = larkCalls.find((call) => call.url === "/open-apis/im/v1/messages/om_menu_message/reply");
+  assert.ok(menuReply, "Lark Message API should receive the interactive menu reply");
+  assert.equal(menuReply.body.msg_type, "interactive");
+  const menuCard = JSON.parse(menuReply.body.content);
+  assert.match(menuCard.header.title.content, /เมนูขอ Password/);
+  assert.ok(
+    menuCard.elements.filter((element) => element.tag === "action").every((element) => element.actions.length === 1),
+    "each Lark account choice should occupy its own row",
+  );
+  const submenuButton = menuCard.elements
+    .flatMap((element) => element.actions || [])
+    .find((button) => button.value?.action === "submenu");
+  assert.ok(submenuButton);
+
+  const submenuResponse = await fetch(`${baseUrl}/api/lark/webhook`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      header: { event_id: "lark-submenu-1", event_type: "card.action.trigger", token: "test-verification-token" },
+      event: {
+        operator: { operator_id: { open_id: "ou_test_user" } },
+        context: { open_chat_id: "oc_test_chat" },
+        action: { value: submenuButton.value },
+      },
+    }),
+  });
+  const submenuResult = await submenuResponse.json();
+  assert.equal(submenuResponse.status, 200);
+  const accountButton = submenuResult.card.elements
+    .flatMap((element) => element.actions || [])
+    .find((button) => button.value?.action === "request");
+  assert.ok(accountButton);
+
+  const requestResponse = await fetch(`${baseUrl}/api/lark/webhook`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      header: { event_id: "lark-request-1", event_type: "card.action.trigger", token: "test-verification-token" },
+      event: {
+        operator: { operator_id: { open_id: "ou_test_user" } },
+        context: { open_chat_id: "oc_test_chat" },
+        action: { value: accountButton.value },
+      },
+    }),
+  });
+  assert.equal(requestResponse.status, 200);
+  assert.equal((await requestResponse.json()).toast.type, "success");
+
+  const requestList = await fetch(`${baseUrl}/api/requests`, {
+    headers: { cookie: adminCookie },
+  }).then((response) => response.json());
+  const larkRequest = requestList.requests[0];
+  assert.equal(larkRequest.source, "Lark");
+  assert.equal(larkRequest.larkChatId, "oc_test_chat");
+  assert.equal(larkRequest.requestVaultItemId, accountButton.value.item);
+
+  const deliveryResponse = await fetch(`${baseUrl}/api/lark/deliver`, {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie: adminCookie },
+    body: JSON.stringify({
+      requestId: larkRequest.id,
+      itemName: larkRequest.system,
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      shareUrl: `${baseUrl}/share.html?p=encrypted-payload`,
+      pin: "Abc12345",
+    }),
+  });
+  const deliveryResult = await deliveryResponse.json();
+  assert.equal(deliveryResponse.status, 200, JSON.stringify(deliveryResult));
+  assert.equal(deliveryResult.deliveredTo, "Lark");
+  const pushes = larkCalls.filter((call) => call.url === "/open-apis/im/v1/messages?receive_id_type=chat_id");
+  assert.equal(pushes.length, 2);
+  assert.equal(pushes[0].body.receive_id, "oc_test_chat");
+  assert.match(JSON.parse(pushes[0].body.content).text, /share\.html\?p=encrypted-payload/);
+  assert.match(JSON.parse(pushes[1].body.content).text, /Abc12345/);
 });

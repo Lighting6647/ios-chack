@@ -1203,7 +1203,8 @@ async function reconnectLineRequests() {
   button.disabled = true;
   button.textContent = "กำลังเชื่อมต่อ…";
   try {
-    await authenticateServerPin(pin);
+    const email = unlockForm.elements.email.value.trim().toLowerCase();
+    await authenticateServerLogin(email, pin);
     await syncLineMenuCatalog();
     linePollReady = false;
     if (!await pullLineRequests()) throw new Error("โหลดรายการคำขอจาก Server ไม่สำเร็จ");

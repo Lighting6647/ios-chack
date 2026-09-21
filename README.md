@@ -17,10 +17,10 @@ Password Manager และระบบบริหารคำขอรหัส
 - ซิงก์ Encrypted Vault ข้ามคอมพิวเตอร์และโทรศัพท์ผ่าน PostgreSQL แบบมี Revision ป้องกันข้อมูลเก่าทับข้อมูลใหม่
 - รองรับรหัสเข้าใช้งานที่มี Unicode/ภาษาไทยแบบคงรูปเดียวกัน
 - นำเข้ารายการจาก `.xlsx`, `.csv` และ `.json` ภายในเบราว์เซอร์
-- รับคำขอจากกลุ่ม LINE และแจกข้อมูลจาก Vault
-- ช่องทางรับคำขอใหม่มีเฉพาะ LINE กลุ่ม “บัญชี 1” ไม่รับ Event จาก Lark หรือหน้าเว็บ
+- รับคำขอจากเมนู Interactive Card ในกลุ่ม Lark และแจกข้อมูลจาก Vault
+- ช่องทางรับคำขอใหม่มีเฉพาะ Lark ไม่รับคำขอใหม่จากหน้าเว็บ
 - Passly Secure Share: ลิงก์เข้ารหัสที่ต้องใช้ Share PIN
-- ส่งลิงก์ Passly Share และ PIN เป็น 2 ข้อความกลับเข้ากลุ่ม LINE ต้นทาง
+- ส่งลิงก์ Passly Share และ PIN เป็น 2 ข้อความกลับเข้าแชต Lark ต้นทาง
 
 ## รูปแบบการเก็บข้อมูล
 
@@ -77,14 +77,14 @@ Passly รองรับ Workbook `User Pass` ที่มีคอลัมน
 2. เลือก Login จาก Vault
 3. Passly เข้ารหัส Username และ Password ด้วย PIN แบบ PBKDF2 + AES-GCM
 4. Ciphertext อยู่ใน URL fragment และไม่ถูกส่งเป็นข้อมูลให้ Server
-5. Server ใช้ LINE Push API ส่งลิงก์เข้ารหัสกลับไปยังกลุ่มต้นทางของคำขอ
-6. ส่ง Share PIN เป็นข้อความ LINE แยกจากข้อความลิงก์
+5. Server ใช้ Lark Message API ส่งลิงก์เข้ารหัสกลับไปยังแชตต้นทางของคำขอ
+6. ส่ง Share PIN เป็นข้อความ Lark แยกจากข้อความลิงก์
 7. ผู้รับเปิด `share.html` และกรอก PIN เพื่อถอดรหัสบนอุปกรณ์
 
 วันหมดอายุของ Secure Share ถูกตรวจบนหน้าเว็บผู้รับ ลิงก์แบบไม่ใช้ฐานข้อมูล
 ไม่สามารถบังคับเปิดได้ครั้งเดียวหรือเพิกถอนย้อนหลังได้
 
-ลิงก์ที่ส่งเข้า LINE ใช้ `share.html?p=<encrypted-payload>` เพื่อให้ LINE in-app browser
+ลิงก์ที่ส่งเข้า Lark ใช้ `share.html?p=<encrypted-payload>` เพื่อให้ Lark in-app browser
 บนโทรศัพท์รักษาข้อมูลเข้ารหัสไว้ครบ หน้า Share จะรับ payload แล้วล้าง query ออกจาก
 แถบที่อยู่ทันที และยังเปิดลิงก์รุ่นเดิมที่ใช้ URL fragment ได้
 
@@ -110,21 +110,24 @@ npm test
 ## Environment variables
 
 - `PASSLY_ADMIN_PIN_HASH` — Scrypt Hash ของ PIN ผู้ดูแล เก็บเป็น Secret บน Render เท่านั้น
-- `LINE_CHANNEL_SECRET` — ตรวจสอบลายเซ็น LINE webhook
-- `LINE_CHANNEL_ACCESS_TOKEN` — ส่งเมนูและข้อความตอบกลับใน LINE
-- `LINE_ALLOWED_GROUP_ID` — จำกัดเฉพาะกลุ่ม “บัญชี 1”
-- `LINE_GROUP_NAME` — ชื่อกลุ่มที่แสดงในระบบ
+- `LARK_APP_ID` — App ID สำหรับ Lark Message API
+- `LARK_APP_SECRET` — App Secret สำหรับขอ Tenant Access Token
+- `LARK_VERIFICATION_TOKEN` — ตรวจสอบ Event Callback จาก Lark
+- `LARK_ALLOWED_CHAT_ID` — จำกัดเฉพาะแชต Lark ที่กำหนด (แนะนำให้ตั้งค่า)
+- `LARK_CHAT_NAME` — ชื่อกลุ่มที่แสดงในระบบ
+- `LARK_WEBHOOK_URL` — Incoming Webhook สำรองเมื่อไม่ได้ใช้ Message API
 - `PORT` — ค่าเริ่มต้น `3030`
-- `DATA_DIR` — ที่เก็บคำขอจาก LINE ค่าเริ่มต้น `./data`
+- `DATA_DIR` — ที่เก็บคำขอจาก Lark ค่าเริ่มต้น `./data`
 
-LINE Webhook:
+Lark Event Callback URL:
 
 ```text
-https://YOUR-DOMAIN/api/line/webhook
+https://YOUR-DOMAIN/api/lark/webhook
 ```
 
-หลังผู้ดูแลอนุมัติ Passly จะส่ง Secure Share กลับด้วย LINE เท่านั้น โดยใช้
-`lineGroupId` ที่บันทึกจากคำขอต้นทาง ไม่สามารถเลือกส่งไปยังกลุ่มอื่นจากหน้าเว็บได้
+เปิด Event Subscription `im.message.receive_v1` และ Card Callback ใน Lark Developer Console
+จากนั้นพิมพ์ `เมนู` ในแชตเพื่อเปิดรายการบัญชี หลังผู้ดูแลอนุมัติ Passly จะส่ง
+Secure Share กลับด้วย Lark โดยใช้ `larkChatId` จากคำขอต้นทาง
 
 ## Deploy บน Render
 
@@ -132,9 +135,9 @@ Repository มี `render.yaml` สำหรับ Render Web Service และ�
 เป็นคำสั่งเริ่มระบบ ตั้งค่า Environment variables บน Render โดยไม่บันทึก
 ค่ารหัสลง GitHub
 
-`/api/requests` และ `/api/line/deliver` เปิดใช้ได้หลังตรวจ PIN สำเร็จเท่านั้น
+`/api/requests`, `/api/lark/catalog` และ `/api/lark/deliver` เปิดใช้ได้หลังตรวจ PIN สำเร็จเท่านั้น
 Server จำกัดการลอง PIN ผิดซ้ำและออก Session Cookie อายุ 12 ชั่วโมง โดยการหมดอายุ
 ของ Session ฝั่ง Server จะไม่ล็อก Vault ที่เปิดอยู่ในเบราว์เซอร์โดยอัตโนมัติ
 
-> Render Free ใช้ filesystem ชั่วคราว คำขอจาก LINE อาจถูกล้างเมื่อ service
+> Render Free ใช้ filesystem ชั่วคราว คำขอจาก Lark อาจถูกล้างเมื่อ service
 > restart หรือ deploy ใหม่ ส่วน Vault ในเบราว์เซอร์จะไม่ถูกล้างตาม Server
