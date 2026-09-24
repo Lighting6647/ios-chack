@@ -1168,18 +1168,36 @@ async function pullLineRequests() {
       throw error;
     }
     const payload = await response.json();
+    const unresolvedOpenIds = [...new Set(requests
+      .filter((request) => request.source === "Lark" && request.larkUserId && request.larkUserId !== "unknown" && (/^Lark User\b/i.test(request.name || "") || request.name === "ผู้ใช้ Lark"))
+      .map((request) => request.larkUserId))];
+    let resolvedProfiles = {};
+    if (unresolvedOpenIds.length) {
+      const profileResponse = await fetch("/api/lark/profiles", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ openIds: unresolvedOpenIds }),
+      });
+      if (profileResponse.ok) resolvedProfiles = (await profileResponse.json()).profiles || {};
+    }
+    if (Object.keys(resolvedProfiles).length) {
+      requests = requests.map((request) => {
+        const profile = resolvedProfiles[request.larkUserId];
+        return profile ? { ...request, name: profile.name, email: profile.email } : request;
+      });
+    }
     const known = new Set(requests.map((request) => request.id));
     const serverRequests = payload.requests || [];
     const incoming = serverRequests.filter((request) => !known.has(request.id));
     const serverById = new Map(serverRequests.map((request) => [request.id, request]));
     const syncedRequests = requests.map((request) => serverById.has(request.id) ? { ...request, ...serverById.get(request.id) } : request);
-    const hasUpdates = syncedRequests.some((request, index) => JSON.stringify(request) !== JSON.stringify(requests[index]));
+    const hasUpdates = Object.keys(resolvedProfiles).length > 0 || syncedRequests.some((request, index) => JSON.stringify(request) !== JSON.stringify(requests[index]));
     if (incoming.length || hasUpdates) {
       requests = [...incoming, ...syncedRequests];
       saveRequests();
       renderRequests();
       renderDashboard();
-      if (linePollReady) {
+      if (linePollReady && incoming.length) {
         const latest = incoming[0];
         toast("มีคำขอใหม่จาก Lark", `${latest.name} · ${latest.system} · ${latest.requestAccount || "ไม่ระบุบัญชี"}`);
         if ("Notification" in window && Notification.permission === "granted") new Notification("Passly: คำขอ Password ใหม่", { body: `${latest.name} — ${latest.system} — ${latest.requestAccount || "ไม่ระบุบัญชี"}`, tag: latest.id });

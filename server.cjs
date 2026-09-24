@@ -801,6 +801,19 @@ async function enrichLarkRequestProfiles(requests) {
   return requests;
 }
 
+async function handleLarkProfileResolution(req, res) {
+  const data = JSON.parse(await readBody(req) || '{}');
+  const openIds = [...new Set((Array.isArray(data.openIds) ? data.openIds : [])
+    .map((value) => String(value || '').trim())
+    .filter((value) => value && value !== 'unknown'))].slice(0, 100);
+  const profiles = {};
+  for (const openId of openIds) {
+    const profile = await getLarkUserProfile(openId);
+    if (!/^Lark User\b|^ผู้ใช้ Lark$/i.test(profile.name)) profiles[openId] = profile;
+  }
+  return send(res, 200, JSON.stringify({ profiles }));
+}
+
 function isValidLarkWebhook(value) {
   return /^https:\/\/open\.larksuite\.com\/open-apis\/bot\/v2\/hook\//.test(value || '');
 }
@@ -1221,6 +1234,10 @@ const server = http.createServer(async (req, res) => {
       if (!requireAdminSession(req, res)) return;
       const requests = await enrichLarkRequestProfiles(await readRequests());
       return send(res, 200, JSON.stringify({ requests }));
+    }
+    if (req.method === 'POST' && req.url === '/api/lark/profiles') {
+      if (!requireAdminSession(req, res)) return;
+      return await handleLarkProfileResolution(req, res);
     }
     
     if (req.method === 'POST' && req.url === '/api/config/line') {

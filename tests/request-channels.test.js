@@ -570,6 +570,13 @@ test("Lark interactive menu requests and secure delivery work end to end", async
   assert.equal(enrichedRequestList.requests[0].name, "Fern Lark User");
   assert.equal(enrichedRequestList.requests[0].email, "fern@example.com");
 
+  const profileResolution = await fetch(`${baseUrl}/api/lark/profiles`, {
+    method: "POST",
+    headers: { "content-type": "application/json", cookie: adminCookie },
+    body: JSON.stringify({ openIds: ["ou_test_user"] }),
+  }).then((response) => response.json());
+  assert.deepEqual(profileResolution.profiles.ou_test_user, { name: "Fern Lark User", email: "fern@example.com" });
+
   const deliveryResponse = await fetch(`${baseUrl}/api/lark/deliver`, {
     method: "POST",
     headers: { "content-type": "application/json", cookie: adminCookie },
