@@ -785,6 +785,9 @@ async function sendLarkMessage(chatId, msgType, content, replyToMessageId = '') 
 }
 
 function larkTextContent(text) { return { text: String(text || '') }; }
+function larkCardCallbackResponse(card) {
+  return { card: { type: 'raw', data: card } };
+}
 function isAllowedLarkChat(chatId) {
   const allowedChatId = getLarkConfig().allowedChatId;
   return !allowedChatId || chatId === allowedChatId;
@@ -824,8 +827,8 @@ async function handleLarkWebhook(req, res) {
   if (eventType === 'card.action.trigger' || eventType === 'card_action') {
     const value = payload.event?.action?.value || payload.action?.value || {};
     const action = String(value.action || '');
-    if (action === 'menu') return send(res, 200, JSON.stringify({ card: larkRequestMenu(value.page) }));
-    if (action === 'submenu') return send(res, 200, JSON.stringify({ card: larkAccountMenu(String(value.group || ''), value.page) }));
+    if (action === 'menu') return send(res, 200, JSON.stringify(larkCardCallbackResponse(larkRequestMenu(value.page))));
+    if (action === 'submenu') return send(res, 200, JSON.stringify(larkCardCallbackResponse(larkAccountMenu(String(value.group || ''), value.page))));
     if (action === 'request') {
       const item = parseLarkCardRequest(payload, value);
       if (!item || !isAllowedLarkChat(item.larkChatId)) return send(res, 200, JSON.stringify({ toast: { type: 'error', content: 'ไม่สามารถรับคำขอจากแชตนี้ได้' } }));

@@ -523,7 +523,8 @@ test("Lark interactive menu requests and secure delivery work end to end", async
   });
   const submenuResult = await submenuResponse.json();
   assert.equal(submenuResponse.status, 200);
-  const accountButton = submenuResult.card.elements
+  assert.equal(submenuResult.card.type, "raw");
+  const accountButton = submenuResult.card.data.elements
     .flatMap((element) => element.actions || [])
     .find((button) => button.value?.action === "request");
   assert.ok(accountButton);
