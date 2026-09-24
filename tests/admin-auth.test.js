@@ -60,8 +60,8 @@ test("Scrypt verifier and signed session never contain the original PIN", async 
 
   const token = createSessionToken(hash, { now: 1_000, ttlMs: 10_000 });
   assert.doesNotMatch(token, new RegExp(pin));
-  assert.equal(verifySessionToken(token, hash, 2_000), true);
-  assert.equal(verifySessionToken(token, hash, 12_000), false);
+  assert.equal(verifySessionToken(token, hash, 2_000)?.v, 1);
+  assert.equal(verifySessionToken(token, hash, 12_000), null);
 });
 
 test("admin API requires the configured PIN and issues an HttpOnly session", async (context) => {

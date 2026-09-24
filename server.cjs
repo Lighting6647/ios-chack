@@ -48,7 +48,30 @@ function getLineConfig() {
   };
 }
 
+function readLocalConfig() {
+  try {
+    return fs.existsSync(configFile) ? JSON.parse(fs.readFileSync(configFile, 'utf8')) : {};
+  } catch (e) {
+    console.error('Error reading config.json:', e);
+    return {};
+  }
+}
+
+function getLarkConfig() {
+  const localConfig = readLocalConfig();
+  return {
+    appId: localConfig.LARK_APP_ID || process.env.LARK_APP_ID || '',
+    appSecret: localConfig.LARK_APP_SECRET || process.env.LARK_APP_SECRET || '',
+    verificationToken: localConfig.LARK_VERIFICATION_TOKEN || process.env.LARK_VERIFICATION_TOKEN || '',
+    webhookUrl: localConfig.LARK_WEBHOOK_URL || process.env.LARK_WEBHOOK_URL || '',
+    allowedChatId: localConfig.LARK_ALLOWED_CHAT_ID || process.env.LARK_ALLOWED_CHAT_ID || '',
+    chatName: localConfig.LARK_CHAT_NAME || process.env.LARK_CHAT_NAME || 'บัญชี 1',
+    menuCatalog: normalizeLineMenuCatalog(localConfig.LARK_MENU_CATALOG || localConfig.LINE_MENU_CATALOG || []),
+  };
+}
+
 const lineApiBaseUrl = (process.env.LINE_API_BASE_URL || 'https://api.line.me').replace(/\/+$/, '');
+const larkApiBaseUrl = (process.env.LARK_API_BASE_URL || 'https://open.larksuite.com').replace(/\/+$/, '');
 const adminPinHash = String(process.env.PASSLY_ADMIN_PIN_HASH || 'scrypt-v1$16384$8$1$ThGLnqAg6XvTUU2ntycp_w$mWhPwfaQxnOyo3rQLMmKD0FrF5BW6xpfMmiFxNkkNpY71ZbK7754SXwoCSF6oOF3yrMYxCRO2L7-3HGzByyalA').trim();
 const adminSessionCookie = 'passly_admin_session';
 const authWindowMs = 15 * 60 * 1000;
@@ -627,20 +650,205 @@ function parseLineRequest(event) {
   };
 }
 
+function larkMenuGroups() {
+  const groups = new Map();
+  for (const item of getLarkConfig().menuCatalog) {
+    const entries = groups.get(item.system) || [];
+    entries.push(item);
+    groups.set(item.system, entries);
+  }
+  return [...groups].map(([system, items]) => ({
+    key: crypto.createHash('sha256').update(system).digest('hex').slice(0, 12), system, items,
+  }));
+}
+
+function larkMenuCard(title, subtitle, choices, page = 1, context = { screen: 'main' }) {
+  const pageSize = 6;
+  const pageCount = Math.max(1, Math.ceil(choices.length / pageSize));
+  const safePage = Math.min(Math.max(Number(page) || 1, 1), pageCount);
+  const visible = choices.slice((safePage - 1) * pageSize, safePage * pageSize);
+  const elements = [
+    { tag: 'div', text: { tag: 'lark_md', content: subtitle } },
+    ...visible.map((choice) => ({
+      tag: 'action',
+      actions: [{
+        tag: 'button', type: 'default',
+        text: { tag: 'plain_text', content: String(choice.label || '-') },
+        value: choice.value,
+      }],
+    })),
+  ];
+  const navigation = [];
+  if (safePage > 1) navigation.push({
+    tag: 'button', type: 'default', text: { tag: 'plain_text', content: '← ก่อนหน้า' },
+    value: { action: context.screen, group: context.group || '', page: safePage - 1 },
+  });
+  if (context.screen === 'submenu') navigation.push({
+    tag: 'button', type: 'default', text: { tag: 'plain_text', content: 'เมนูหลัก' },
+    value: { action: 'menu', page: 1 },
+  });
+  if (safePage < pageCount) navigation.push({
+    tag: 'button', type: 'default', text: { tag: 'plain_text', content: 'ถัดไป →' },
+    value: { action: context.screen, group: context.group || '', page: safePage + 1 },
+  });
+  if (navigation.length) elements.push({ tag: 'action', actions: navigation });
+  elements.push({ tag: 'note', elements: [{ tag: 'plain_text', content: `หน้า ${safePage}/${pageCount} · แสดงครบทุกบัญชี` }] });
+  return {
+    config: { wide_screen_mode: true },
+    header: { template: 'green', title: { tag: 'plain_text', content: `PASSLY · ${title}` } },
+    elements,
+  };
+}
+
+function larkRequestMenu(page = 1) {
+  const groups = larkMenuGroups();
+  const choices = groups.length
+    ? groups.map((group) => ({
+      label: group.system,
+      value: group.items.length > 1
+        ? { action: 'submenu', group: group.key, page: 1 }
+        : { action: 'request', item: group.items[0].id },
+    }))
+    : requestSystems.map((system) => ({
+      label: system,
+      value: requestAccountMenus[system]?.length > 1
+        ? { action: 'submenu', group: system, page: 1 }
+        : { action: 'request', system },
+    }));
+  const accountCount = getLarkConfig().menuCatalog.length;
+  return larkMenuCard('เมนูขอ Password', accountCount ? `เลือกจาก **${accountCount} บัญชี** ใน Vault` : 'เลือกบัญชีที่ต้องการใช้งาน', choices, page, { screen: 'menu' });
+}
+
+function larkAccountMenu(groupKey, page = 1) {
+  const dynamicGroup = larkMenuGroups().find((group) => group.key === groupKey);
+  if (dynamicGroup) return larkMenuCard(
+    dynamicGroup.system,
+    `เลือกบัญชีที่ต้องการขอ Password · **${dynamicGroup.items.length} บัญชี**`,
+    dynamicGroup.items.map((item) => ({ label: item.account, value: { action: 'request', item: item.id } })),
+    page,
+    { screen: 'submenu', group: groupKey },
+  );
+  const accounts = requestAccountMenus[groupKey] || [];
+  return larkMenuCard(
+    groupKey,
+    `เลือกบัญชีที่ต้องการขอ Password · **${accounts.length} บัญชี**`,
+    accounts.map((account) => ({ label: account, value: { action: 'request', system: groupKey, account } })),
+    page,
+    { screen: 'submenu', group: groupKey },
+  );
+}
+
+let larkTokenCache = { token: '', expiresAt: 0 };
+
+async function getLarkTenantToken() {
+  const { appId, appSecret } = getLarkConfig();
+  if (!appId || !appSecret) throw new Error('ยังไม่ได้ตั้งค่า LARK_APP_ID และ LARK_APP_SECRET');
+  if (larkTokenCache.token && larkTokenCache.expiresAt > Date.now() + 60_000) return larkTokenCache.token;
+  const response = await fetch(`${larkApiBaseUrl}/open-apis/auth/v3/tenant_access_token/internal`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ app_id: appId, app_secret: appSecret }),
+  });
+  const result = await response.json();
+  if (!response.ok || result.code) throw new Error(result.msg || 'ขอ Lark access token ไม่สำเร็จ');
+  larkTokenCache = { token: result.tenant_access_token, expiresAt: Date.now() + Math.max(60, Number(result.expire) || 7200) * 1000 };
+  return larkTokenCache.token;
+}
+
+function isValidLarkWebhook(value) {
+  return /^https:\/\/open\.larksuite\.com\/open-apis\/bot\/v2\/hook\//.test(value || '');
+}
+
+async function sendLarkMessage(chatId, msgType, content, replyToMessageId = '') {
+  const config = getLarkConfig();
+  if (config.appId && config.appSecret && (chatId || replyToMessageId)) {
+    const token = await getLarkTenantToken();
+    const endpoint = replyToMessageId
+      ? `${larkApiBaseUrl}/open-apis/im/v1/messages/${encodeURIComponent(replyToMessageId)}/reply`
+      : `${larkApiBaseUrl}/open-apis/im/v1/messages?receive_id_type=chat_id`;
+    const body = replyToMessageId
+      ? { msg_type: msgType, content: JSON.stringify(content) }
+      : { receive_id: chatId, msg_type: msgType, content: JSON.stringify(content) };
+    const response = await fetch(endpoint, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` }, body: JSON.stringify(body),
+    });
+    const result = await response.json();
+    if (!response.ok || result.code) throw new Error(result.msg || 'Lark Message API error');
+    return result;
+  }
+  if (!isValidLarkWebhook(config.webhookUrl)) throw new Error('ยังไม่ได้ตั้งค่า Lark App หรือ Incoming Webhook');
+  const response = await fetch(config.webhookUrl, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ msg_type: msgType, content }),
+  });
+  const result = await response.json();
+  if (!response.ok || (result.code && result.code !== 0)) throw new Error(result.msg || result.StatusMessage || 'Lark webhook error');
+  return result;
+}
+
+function larkTextContent(text) { return { text: String(text || '') }; }
+function isAllowedLarkChat(chatId) {
+  const allowedChatId = getLarkConfig().allowedChatId;
+  return !allowedChatId || chatId === allowedChatId;
+}
+function verifyLarkPayload(payload) {
+  const token = getLarkConfig().verificationToken;
+  return !token || payload.header?.token === token || payload.token === token;
+}
+
+function parseLarkCardRequest(payload, value) {
+  const catalogItem = value.item ? getLarkConfig().menuCatalog.find((item) => item.id === value.item) : null;
+  const system = catalogItem?.system || String(value.system || '').trim();
+  if (!system) return null;
+  const openId = payload.event?.operator?.operator_id?.open_id || payload.event?.sender?.sender_id?.open_id || 'unknown';
+  const chatId = payload.event?.context?.open_chat_id || payload.event?.message?.chat_id || getLarkConfig().allowedChatId;
+  const eventId = payload.header?.event_id || crypto.randomUUID();
+  return {
+    id: `lark-${eventId}`, name: `Lark User ${String(openId).slice(-6)}`, email: openId, system,
+    reason: 'สมาชิกกดขอ Password จากเมนูในกลุ่ม Lark', date: new Date().toISOString().slice(0, 10),
+    receivedAt: new Date().toISOString(), status: 'pending', urgent: false, source: 'Lark',
+    larkUserId: openId, larkChatId: chatId, larkChatName: getLarkConfig().chatName,
+    requestAccount: catalogItem?.account || String(value.account || '').trim() || null,
+    requestVaultItemId: catalogItem?.id || null,
+  };
+}
+
 async function handleLarkWebhook(req, res) {
   const raw = await readBody(req);
   const payload = JSON.parse(raw || '{}');
 
-  // URL Verification for Lark Event Subscriptions
+  if (!verifyLarkPayload(payload)) return send(res, 401, JSON.stringify({ ok: false, error: 'Invalid Lark verification token' }));
   if (payload.type === 'url_verification') {
     return send(res, 200, JSON.stringify({ challenge: payload.challenge }));
+  }
+
+  const eventType = payload.header?.event_type || payload.type;
+  if (eventType === 'card.action.trigger' || eventType === 'card_action') {
+    const value = payload.event?.action?.value || payload.action?.value || {};
+    const action = String(value.action || '');
+    if (action === 'menu') return send(res, 200, JSON.stringify({ card: larkRequestMenu(value.page) }));
+    if (action === 'submenu') return send(res, 200, JSON.stringify({ card: larkAccountMenu(String(value.group || ''), value.page) }));
+    if (action === 'request') {
+      const item = parseLarkCardRequest(payload, value);
+      if (!item || !isAllowedLarkChat(item.larkChatId)) return send(res, 200, JSON.stringify({ toast: { type: 'error', content: 'ไม่สามารถรับคำขอจากแชตนี้ได้' } }));
+      const current = await readRequests();
+      if (!current.some((saved) => saved.id === item.id)) {
+        current.unshift(item);
+        await writeRequests(current);
+      }
+      return send(res, 200, JSON.stringify({ toast: { type: 'success', content: `รับคำขอ ${item.system} แล้ว ผู้ดูแลกำลังตรวจสอบ` } }));
+    }
+    return send(res, 200, JSON.stringify({ toast: { type: 'info', content: 'ไม่พบรายการที่เลือก' } }));
   }
 
   if (payload.header?.event_type === 'im.message.receive_v1' && payload.event?.message?.message_type === 'text') {
     try {
       const contentObj = JSON.parse(payload.event.message.content || '{}');
-      const text = (contentObj.text || '').trim();
-      
+      const text = (contentObj.text || '').replace(/<at\b[^>]*>.*?<\/at>/gi, '').trim();
+      const chatId = payload.event.message.chat_id;
+      if (!isAllowedLarkChat(chatId)) return send(res, 200, JSON.stringify({ ok: true, received: 0 }));
+      if (/^(เมนู|ขอรหัส|ขอ password|password)$/i.test(text)) {
+        await sendLarkMessage(chatId, 'interactive', larkRequestMenu(), payload.event.message.message_id);
+        return send(res, 200, JSON.stringify({ ok: true, menu: true }));
+      }
       const isRequest = /ขอ\s*(รหัส|password|pass)|password\s*request/i.test(text);
       if (isRequest) {
         const clean = text.replace(/ขอ\s*(รหัส|password|pass)\s*/i, '').replace(/password\s*request\s*/i, '').trim();
@@ -662,7 +870,8 @@ async function handleLarkWebhook(req, res) {
             urgent: false,
             source: 'Lark',
             larkUserId: openId,
-            larkChatId: payload.event.message.chat_id,
+            larkChatId: chatId,
+            larkChatName: getLarkConfig().chatName,
           };
           
           const current = await readRequests();
@@ -670,14 +879,7 @@ async function handleLarkWebhook(req, res) {
             current.unshift(item);
             await writeRequests(current);
             
-            const webhookUrl = process.env.LARK_WEBHOOK_URL;
-            if (webhookUrl && /^https:\/\/open\.larksuite\.com\/open-apis\/bot\/v2\/hook\//.test(webhookUrl)) {
-              fetch(webhookUrl, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ msg_type: 'text', content: { text: `รับคำขอ ${item.system} แล้ว ✅\nผู้ดูแลจะตรวจสอบผ่านหน้าเว็บ` } })
-              }).catch(() => {});
-            }
+            await sendLarkMessage(chatId, 'text', larkTextContent(`รับคำขอ ${item.system} แล้ว ✅\nผู้ดูแลจะตรวจสอบผ่านหน้าเว็บ`), payload.event.message.message_id);
           }
         }
       }
@@ -691,19 +893,7 @@ async function handleLarkWebhook(req, res) {
 
 async function handleLark(req, res) {
   const data = JSON.parse(await readBody(req) || '{}');
-  const webhook = process.env.LARK_WEBHOOK_URL || data.webhook;
-  if (!/^https:\/\/open\.larksuite\.com\/open-apis\/bot\/v2\/hook\//.test(webhook || '')) {
-    throw new Error('Lark webhook ไม่ถูกต้อง');
-  }
-  const response = await fetch(webhook, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ msg_type: 'text', content: { text: String(data.text || '') } }),
-  });
-  const result = await response.json();
-  if (!response.ok || (result.code && result.code !== 0)) {
-    throw new Error(result.msg || result.StatusMessage || 'Lark API error');
-  }
+  await sendLarkMessage(data.chatId || getLarkConfig().allowedChatId, 'text', larkTextContent(data.text));
   send(res, 200, JSON.stringify({ ok: true }));
 }
 
@@ -750,6 +940,37 @@ async function handleLineCatalogWrite(req, res) {
   } catch (err) {
     send(res, 400, JSON.stringify({ ok: false, error: err.message }));
   }
+}
+
+async function handleLarkConfigWrite(req, res) {
+  try {
+    const body = await parseBody(req);
+    const localConfig = readLocalConfig();
+    localConfig.LARK_APP_ID = String(body.appId || '').trim();
+    localConfig.LARK_APP_SECRET = String(body.appSecret || '').trim();
+    localConfig.LARK_VERIFICATION_TOKEN = String(body.verificationToken || '').trim();
+    localConfig.LARK_WEBHOOK_URL = String(body.webhookUrl || '').trim();
+    localConfig.LARK_ALLOWED_CHAT_ID = String(body.chatId || '').trim();
+    if (localConfig.LARK_WEBHOOK_URL && !isValidLarkWebhook(localConfig.LARK_WEBHOOK_URL)) throw new Error('Lark Incoming Webhook ไม่ถูกต้อง');
+    fs.mkdirSync(dataDir, { recursive: true });
+    fs.writeFileSync(configFile, JSON.stringify(localConfig, null, 2));
+    larkTokenCache = { token: '', expiresAt: 0 };
+    send(res, 200, JSON.stringify({ ok: true }));
+  } catch (err) { send(res, 400, JSON.stringify({ ok: false, error: err.message })); }
+}
+
+async function handleLarkCatalogWrite(req, res) {
+  try {
+    const body = await parseBody(req);
+    const catalog = normalizeLineMenuCatalog(body.items);
+    if (!catalog.length && Array.isArray(body.items) && body.items.length) throw new Error('รายการเมนู Lark ไม่ถูกต้อง');
+    const localConfig = readLocalConfig();
+    localConfig.LARK_MENU_CATALOG = catalog;
+    localConfig.LARK_MENU_CATALOG_SYNCED_AT = new Date().toISOString();
+    fs.mkdirSync(dataDir, { recursive: true });
+    fs.writeFileSync(configFile, JSON.stringify(localConfig, null, 2));
+    send(res, 200, JSON.stringify({ ok: true, count: catalog.length }));
+  } catch (err) { send(res, 400, JSON.stringify({ ok: false, error: err.message })); }
 }
 
 async function handleLineWebhook(req, res) {
@@ -881,6 +1102,33 @@ async function handleLineDelivery(req, res) {
   send(res, 200, JSON.stringify({ ok: true, deliveredTo: 'LINE' }));
 }
 
+async function handleLarkDelivery(req, res) {
+  const data = JSON.parse(await readBody(req) || '{}');
+  const requests = await readRequests();
+  const request = requests.find((item) => item.id === String(data.requestId || ''));
+  if (!request || request.source !== 'Lark') return send(res, 404, JSON.stringify({ ok: false, error: 'ไม่พบคำขอ Lark นี้ กรุณาให้ผู้ใช้ส่งคำขอใหม่' }));
+  const chatId = String(request.larkChatId || getLarkConfig().allowedChatId || '');
+  if (!isAllowedLarkChat(chatId)) return send(res, 403, JSON.stringify({ ok: false, error: 'แชต Lark ของคำขอนี้ไม่ได้รับอนุญาต' }));
+  const pin = String(data.pin || '').trim();
+  const itemName = String(data.itemName || request.system || 'บัญชีที่ร้องขอ').trim().slice(0, 100);
+  const expiresAt = new Date(data.expiresAt);
+  if (!/^[A-Za-z0-9]{4,32}$/.test(pin)) throw new Error('Share PIN ไม่ถูกต้อง');
+  if (!itemName) throw new Error('ไม่พบชื่อรายการที่จะแจก');
+  if (Number.isNaN(expiresAt.getTime()) || expiresAt <= new Date() || expiresAt > new Date(Date.now() + maxShareExpiryMs)) throw new Error('วันหมดอายุของลิงก์ต้องอยู่ในอนาคตและไม่เกิน 30 วัน');
+  const shareUrl = validatedShareUrl(req, data.shareUrl);
+  const expiryText = new Intl.DateTimeFormat('th-TH', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'Asia/Bangkok' }).format(expiresAt);
+  const linkMessage = ['[Passly] ข้อมูลเข้าใช้งานพร้อมแล้ว', `ผู้รับ: ${request.name}`, `ระบบ: ${itemName}`, `หมดอายุ: ${expiryText}`, `เปิดข้อมูล: ${shareUrl}`].join('\n');
+  const pinMessage = [`[Passly] Share PIN: ${pin}`, `สำหรับคำขอ ${itemName}`, 'ใช้ PIN นี้เปิดลิงก์ Passly ในข้อความก่อนหน้า'].join('\n');
+  if (linkMessage.length > 5_000 || pinMessage.length > 5_000) throw new Error('ข้อความ Lark ยาวเกินขีดจำกัด');
+  await sendLarkMessage(chatId, 'text', larkTextContent(linkMessage));
+  await sendLarkMessage(chatId, 'text', larkTextContent(pinMessage));
+  request.status = 'delivered';
+  request.deliveredAt = new Date().toISOString();
+  request.deliveryMethod = 'lark-secure-share';
+  await writeRequests(requests);
+  send(res, 200, JSON.stringify({ ok: true, deliveredTo: 'Lark' }));
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'POST' && req.url === '/api/auth/pin') {
@@ -925,13 +1173,25 @@ const server = http.createServer(async (req, res) => {
       if (!requireAdminSession(req, res)) return;
       return await handleLineConfigWrite(req, res);
     }
+    if (req.method === 'POST' && req.url === '/api/config/lark') {
+      if (!requireAdminSession(req, res)) return;
+      return await handleLarkConfigWrite(req, res);
+    }
     if (req.method === 'POST' && req.url === '/api/line/catalog') {
       if (!requireAdminSession(req, res)) return;
       return await handleLineCatalogWrite(req, res);
     }
+    if (req.method === 'POST' && req.url === '/api/lark/catalog') {
+      if (!requireAdminSession(req, res)) return;
+      return await handleLarkCatalogWrite(req, res);
+    }
     if (req.method === 'POST' && req.url === '/api/line/deliver') {
       if (!requireAdminSession(req, res)) return;
       return await handleLineDelivery(req, res);
+    }
+    if (req.method === 'POST' && req.url === '/api/lark/deliver') {
+      if (!requireAdminSession(req, res)) return;
+      return await handleLarkDelivery(req, res);
     }
     if (req.method === 'GET' && req.url === '/api/health') {
       return send(res, 200, JSON.stringify({
@@ -942,12 +1202,16 @@ const server = http.createServer(async (req, res) => {
         lineGroupRestricted: Boolean(getLineConfig().allowedGroupId),
         vaultSyncConfigured: Boolean(vaultStore),
         requestStorePersistent: Boolean(process.env.DATABASE_URL),
-        requestChannel: 'LINE',
-        deliveryChannel: 'LINE',
+        requestChannel: 'Lark',
+        deliveryChannel: 'Lark',
         lineNestedAccountMenus: true,
         lineMenuCatalogCount: getLineConfig().menuCatalog.length,
         larkInboundEnabled: true,
-        larkConfigured: Boolean(process.env.LARK_WEBHOOK_URL),
+        larkConfigured: Boolean((getLarkConfig().appId && getLarkConfig().appSecret) || isValidLarkWebhook(getLarkConfig().webhookUrl)),
+        larkAppConfigured: Boolean(getLarkConfig().appId && getLarkConfig().appSecret),
+        larkVerificationConfigured: Boolean(getLarkConfig().verificationToken),
+        larkChatRestricted: Boolean(getLarkConfig().allowedChatId),
+        larkMenuCatalogCount: getLarkConfig().menuCatalog.length,
       }));
     }
 

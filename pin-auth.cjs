@@ -116,7 +116,6 @@ function createSessionToken(pinHash, options = {}) {
     exp: now + ttlMs,
     nonce: crypto.randomBytes(16).toString('base64url'),
     email: options.email,
-    email: options.email,
   })).toString('base64url');
   const signature = crypto
     .createHmac('sha256', sessionSigningKey(pinHash))

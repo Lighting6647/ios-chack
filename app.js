@@ -594,7 +594,7 @@ function afterUnlock() {
   if (document.hidden || !document.hasFocus()) activatePrivacyShield();
   renderAll();
   showView(activeView);
-  syncLineMenuCatalog();
+  syncLarkMenuCatalog();
   pullLineRequests();
   clearInterval(lineInterval);
   lineInterval = setInterval(pullLineRequests, 5000);
@@ -745,7 +745,7 @@ function renderRequests() {
   $("#requestTableBody").innerHTML = filtered.map((request) => `
     <tr>
       <td><div class="user-cell"><span class="avatar">${escapeHtml(initials(request.name))}</span><div><strong>${escapeHtml(request.name)}${request.urgent ? '<em class="urgent-dot">ด่วน</em>' : ""}</strong><small>${escapeHtml(request.email)}</small></div></div></td>
-      <td><strong>${escapeHtml(request.system)}</strong><small class="vault-updated">${request.source === "LINE" ? "จาก LINE" : "รายการเดิมก่อนใช้ LINE เท่านั้น"}</small></td>
+      <td><strong>${escapeHtml(request.system)}</strong><small class="vault-updated">${request.source === "Lark" ? "จาก Lark" : `จาก ${escapeHtml(request.source || "รายการเดิม")}`}</small></td>
       <td class="reason-cell">${escapeHtml(request.reason)}</td>
       <td>${formatDate(request.date)}</td>
       <td><span class="status ${request.status}">${requestLabels[request.status] || request.status}</span></td>
@@ -938,7 +938,7 @@ async function openItemDetail(itemId) {
 
 function openRequestEditor(requestId = null) {
   if (!requestId) {
-    toast("รับคำขอผ่าน LINE เท่านั้น", "ให้สมาชิกกดขอ Password จากเมนูในกลุ่ม LINE “บัญชี 1”");
+    toast("รับคำขอผ่าน Lark เท่านั้น", "ให้สมาชิกพิมพ์ “เมนู” แล้วเลือกบัญชีในกลุ่ม Lark");
     return;
   }
   const form = $("#requestForm");
@@ -951,7 +951,7 @@ function openRequestEditor(requestId = null) {
   });
   form.elements.status.value = request?.status || "pending";
   form.elements.urgent.checked = Boolean(request?.urgent);
-  $("#requestModalTitle").textContent = "แก้ไขคำขอจาก LINE";
+  $("#requestModalTitle").textContent = "แก้ไขคำขอจาก Lark";
   openModal("requestModal");
 }
 
@@ -962,8 +962,8 @@ function generateSharePin() {
 function updateDeliverySubmitButton() {
   const form = $("#deliverForm");
   const button = form.querySelector('button[type="submit"]');
-  button.innerHTML = form.elements.channel.value === "line"
-    ? 'ส่งเข้า LINE <span>→</span>'
+  button.innerHTML = form.elements.channel.value === "lark"
+    ? 'ส่งเข้า Lark <span>→</span>'
     : 'คัดลอกข้อความ <span>→</span>';
 }
 
@@ -1105,18 +1105,18 @@ function openGroupEditor(id = null) {
   openModal("groupModal");
 }
 
-async function sendLineDelivery({ requestId, itemName, expiresAt, shareUrl, pin }) {
-  const response = await fetch("/api/line/deliver", {
+async function sendLarkDelivery({ requestId, itemName, expiresAt, shareUrl, pin }) {
+  const response = await fetch("/api/lark/deliver", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ requestId, itemName, expiresAt, shareUrl, pin }),
   });
   const result = await response.json().catch(() => ({}));
-  if (!response.ok || result.ok === false) throw new Error(result.error || "LINE ส่งข้อมูลไม่สำเร็จ");
+  if (!response.ok || result.ok === false) throw new Error(result.error || "Lark ส่งข้อมูลไม่สำเร็จ");
   return result;
 }
 
-async function syncLineMenuCatalog() {
+async function syncLarkMenuCatalog() {
   if (!vault) return false;
   const items = loginItems().map((item) => ({
     id: item.id,
@@ -1124,7 +1124,7 @@ async function syncLineMenuCatalog() {
     account: item.username || item.owner || item.purpose || "บัญชีหลัก",
   }));
   try {
-    const response = await fetch("/api/line/catalog", {
+    const response = await fetch("/api/lark/catalog", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ items }),
@@ -1144,9 +1144,9 @@ async function checkServerConfiguration() {
     $("#serverPinStatus").textContent = result.adminPinConfigured
       ? "PIN ผู้ดูแลถูกเก็บเป็นค่า Hash บน Server และพร้อมใช้งาน"
       : "ยังไม่ได้ตั้งค่า PASSLY_ADMIN_PIN_HASH บน Server";
-    $("#lineConfigStatus").textContent = result.lineConfigured && result.lineReplyConfigured
-      ? `พร้อมใช้งาน${result.lineGroupRestricted ? " · จำกัดเฉพาะกลุ่มที่กำหนด" : ""}`
-      : "ยังตั้งค่า LINE Channel บน Server ไม่ครบ";
+    $("#lineConfigStatus").textContent = result.larkConfigured
+      ? `พร้อมใช้งาน${result.larkAppConfigured ? " · Lark App" : " · Incoming Webhook"}${result.larkChatRestricted ? " · จำกัดเฉพาะแชตที่กำหนด" : ""}`
+      : "ยังตั้งค่า Lark App หรือ Incoming Webhook บน Server ไม่ครบ";
   } catch {
     $("#serverPinStatus").textContent = "ตรวจสอบระบบ PIN บน Server ไม่สำเร็จ";
     $("#lineConfigStatus").textContent = "ตรวจสอบ Server ไม่สำเร็จ";
@@ -1177,7 +1177,7 @@ async function pullLineRequests() {
       renderDashboard();
       if (linePollReady) {
         const latest = incoming[0];
-        toast("มีคำขอใหม่จาก LINE", `${latest.system} · ${latest.reason}`);
+        toast("มีคำขอใหม่จาก Lark", `${latest.system} · ${latest.reason}`);
         if ("Notification" in window && Notification.permission === "granted") new Notification("Passly: คำขอ Password ใหม่", { body: `${latest.system} — ${latest.reason}`, tag: latest.id });
       }
     }
@@ -1196,7 +1196,7 @@ async function pullLineRequests() {
 
 async function reconnectLineRequests() {
   if (!vault || lineReconnectBusy) return;
-  const pin = prompt("กรอก PIN เพื่อเชื่อมต่อรายการคำขอ LINE อีกครั้ง");
+  const pin = prompt("กรอก PIN เพื่อเชื่อมต่อรายการคำขอ Lark อีกครั้ง");
   if (pin === null) return;
   const button = $("#lineReconnectBtn");
   lineReconnectBusy = true;
@@ -1205,10 +1205,10 @@ async function reconnectLineRequests() {
   try {
     const email = unlockForm.elements.email.value.trim().toLowerCase();
     await authenticateServerLogin(email, pin);
-    await syncLineMenuCatalog();
+    await syncLarkMenuCatalog();
     linePollReady = false;
     if (!await pullLineRequests()) throw new Error("โหลดรายการคำขอจาก Server ไม่สำเร็จ");
-    toast("เชื่อมต่อ LINE แล้ว", "โหลดรายการคำขอล่าสุดเรียบร้อย");
+    toast("เชื่อมต่อ Lark แล้ว", "โหลดรายการคำขอล่าสุดเรียบร้อย");
   } catch (error) {
     toast("เชื่อมต่อไม่สำเร็จ", error.message || "กรุณาตรวจสอบ PIN แล้วลองใหม่");
   } finally {
@@ -1482,7 +1482,7 @@ $("#requestForm").addEventListener("submit", (event) => {
   const form = event.currentTarget;
   const existing = requests.find((request) => request.id === form.elements.id.value);
   if (!existing) {
-    toast("เพิ่มคำขอจากหน้าเว็บไม่ได้", "คำขอใหม่ต้องมาจากกลุ่ม LINE “บัญชี 1” เท่านั้น");
+    toast("เพิ่มคำขอจากหน้าเว็บไม่ได้", "คำขอใหม่ต้องมาจากเมนูในกลุ่ม Lark เท่านั้น");
     return;
   }
   const data = {
@@ -1511,7 +1511,7 @@ $("#deliverForm").addEventListener("submit", async (event) => {
   if (item.reprompt && !await verifyMasterPassword("ยืนยันรหัสผ่านก่อนสร้างลิงก์แจกข้อมูล")) return;
   const channel = form.elements.channel.value;
   submitButton.disabled = true;
-  submitButton.textContent = channel === "line" ? "กำลังส่งเข้า LINE…" : "กำลังคัดลอก…";
+  submitButton.textContent = channel === "lark" ? "กำลังส่งเข้า Lark…" : "กำลังคัดลอก…";
   try {
     const expiresAt = resolveShareExpiry(
       form.elements.expiry.value,
@@ -1530,8 +1530,8 @@ $("#deliverForm").addEventListener("submit", async (event) => {
     const prefix = vault.settings.sharePrefix || "[Passly] ข้อมูลเข้าใช้งาน";
     const message = `${prefix}\nผู้รับ: ${request.name}\nระบบ: ${item.name}\nหมดอายุ: ${formatDateTime(expiresAt)}\nลิงก์: ${shareUrl.href}`;
 
-    if (channel === "line") {
-      await sendLineDelivery({
+    if (channel === "lark") {
+      await sendLarkDelivery({
         requestId: request.id,
         itemName: item.name,
         expiresAt,
@@ -1545,28 +1545,28 @@ $("#deliverForm").addEventListener("submit", async (event) => {
     const reference = await sha256Reference(shareUrl.href);
     request.status = "delivered";
     request.deliveredAt = nowIso();
-    request.deliveryMethod = channel === "line" ? "line-secure-share" : "manual-copy";
+    request.deliveryMethod = channel === "lark" ? "lark-secure-share" : "manual-copy";
     request.deliveryAudit = { itemId: item.id, channel, expiresAt, reference };
     saveRequests();
-    addActivity("แจกข้อมูลจาก Vault", `${item.name} ให้ ${request.name} · ${channel === "line" ? "LINE" : "คัดลอก"} · ref ${reference}`, item.id);
+    addActivity("แจกข้อมูลจาก Vault", `${item.name} ให้ ${request.name} · ${channel === "lark" ? "Lark" : "คัดลอก"} · ref ${reference}`, item.id);
     await persistVault();
     shareResult = { message, pin };
     $("#shareMessage").value = message;
     $("#sharePinResult").textContent = pin;
-    $("#shareResultEyebrow").textContent = channel === "line" ? "Sent to LINE" : "Share ready";
-    $("#shareResultTitle").textContent = channel === "line" ? "ส่งข้อมูลเข้า LINE แล้ว" : "คัดลอกข้อความแล้ว";
-    $("#shareResultCopy").textContent = channel === "line"
-      ? "ผู้รับจะได้รับลิงก์ Passly และ Share PIN เป็น 2 ข้อความในกลุ่มต้นทาง"
+    $("#shareResultEyebrow").textContent = channel === "lark" ? "Sent to Lark" : "Share ready";
+    $("#shareResultTitle").textContent = channel === "lark" ? "ส่งข้อมูลเข้า Lark แล้ว" : "คัดลอกข้อความแล้ว";
+    $("#shareResultCopy").textContent = channel === "lark"
+      ? "ผู้รับจะได้รับลิงก์ Passly และ Share PIN เป็น 2 ข้อความในแชตต้นทาง"
       : "นำข้อความไปส่งให้ผู้รับ และกดคัดลอก Share PIN เพื่อส่งแยกอีกครั้ง";
     closeModal("deliverModal");
     openModal("shareResultModal");
     renderAll();
     toast(
-      channel === "line" ? "ส่งเข้า LINE แล้ว" : "คัดลอกข้อความแล้ว",
-      channel === "line" ? "ลิงก์เข้ารหัสและ Share PIN ถูกส่งเป็น 2 ข้อความ" : "อย่าลืมส่ง Share PIN ให้ผู้รับ",
+      channel === "lark" ? "ส่งเข้า Lark แล้ว" : "คัดลอกข้อความแล้ว",
+      channel === "lark" ? "ลิงก์เข้ารหัสและ Share PIN ถูกส่งเป็น 2 ข้อความ" : "อย่าลืมส่ง Share PIN ให้ผู้รับ",
     );
   } catch (error) {
-    toast(channel === "line" ? "ส่งเข้า LINE ไม่สำเร็จ" : "คัดลอกไม่สำเร็จ", error.message);
+    toast(channel === "lark" ? "ส่งเข้า Lark ไม่สำเร็จ" : "คัดลอกไม่สำเร็จ", error.message);
   } finally {
     submitButton.disabled = false;
     updateDeliverySubmitButton();
@@ -2034,29 +2034,30 @@ $("#exportActivityBtn").addEventListener("click", () => {
 
 $("#changeMasterBtn").addEventListener("click", () => openModal("changeMasterModal"));
 
-$("#lineConfigForm").addEventListener("submit", async (e) => {
+$("#larkConfigForm").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const secret = $("#lineSecret").value.trim();
-  const token = $("#lineToken").value.trim();
-  const groupId = $("#lineGroupId").value.trim();
+  const appId = $("#larkAppId").value.trim();
+  const appSecret = $("#larkAppSecret").value.trim();
+  const verificationToken = $("#larkVerificationToken").value.trim();
+  const webhookUrl = $("#larkWebhookUrl").value.trim();
+  const chatId = $("#larkChatId").value.trim();
   const btn = e.target.querySelector('button');
   const originalText = btn.textContent;
   btn.textContent = "กำลังบันทึก...";
   btn.disabled = true;
 
   try {
-    const response = await fetch('/api/config/line', {
+    const response = await fetch('/api/config/lark', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ secret, token, groupId })
+      body: JSON.stringify({ appId, appSecret, verificationToken, webhookUrl, chatId })
     });
     const result = await response.json();
     if (!result.ok) throw new Error(result.error || "เกิดข้อผิดพลาด");
     
-    toast("บันทึกสำเร็จ", "ตั้งค่า LINE เรียบร้อยแล้ว");
-    $("#lineSecret").value = "";
-    $("#lineToken").value = "";
-    $("#lineGroupId").value = "";
+    toast("บันทึกสำเร็จ", "ตั้งค่า Lark เรียบร้อยแล้ว");
+    $("#larkAppSecret").value = "";
+    $("#larkVerificationToken").value = "";
     await fetchServerHealth();
   } catch (err) {
     toast("ข้อผิดพลาด", err.message);
