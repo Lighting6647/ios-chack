@@ -23,6 +23,7 @@ const {
   createVaultStore,
 } = require('./vault-sync-store.cjs');
 const { createRequestStore } = require('./request-store.cjs');
+const { unlockVaultEnvelope } = require('./vault-crypto-node.cjs');
 const { createUserStore } = require('./user-store.cjs');
 
 const root = __dirname;
@@ -875,6 +876,53 @@ async function parseLarkCardRequest(payload, value) {
   };
 }
 
+
+async function attemptAutoDeliver(item) {
+  const botEmail = process.env.AUTO_DELIVER_BOT_EMAIL;
+  const botPassword = process.env.AUTO_DELIVER_BOT_PASSWORD;
+  if (!botEmail || !botPassword) return false;
+
+  const envelope = await vaultStore.get();
+  if (!envelope) return false;
+
+  try {
+    const { vault } = await unlockVaultEnvelope(envelope, botEmail, botPassword);
+    
+    // Find the requested item in the vault
+    let targetItem = null;
+    if (item.requestVaultItemId) {
+      targetItem = vault.items.find(i => i.id === item.requestVaultItemId);
+    } else {
+      // Search by system/account name
+      const searchTarget = item.requestAccount || item.system;
+      targetItem = vault.items.find(i => 
+        i.name.toLowerCase() === searchTarget.toLowerCase() || 
+        i.name.toLowerCase().includes(searchTarget.toLowerCase())
+      );
+    }
+
+    if (targetItem && targetItem.password) {
+      // Send directly to Lark
+      const message = `✅ พบข้อมูลที่คุณขอแล้ว\n\n👤 บัญชี: ${targetItem.name}\n📧 Username: ${targetItem.username || '-'}\n🔑 Password: ${targetItem.password}`;
+      await sendLarkMessage(item.larkChatId, 'text', larkTextContent(message));
+      
+      // Save request as delivered
+      item.status = 'delivered';
+      const delivered = await attemptAutoDeliver(item);
+          if (delivered) {
+            return send(res, 200, JSON.stringify({ ok: true, delivered: true }));
+          }
+          const current = await readRequests();
+      current.unshift(item);
+      await writeRequests(current);
+      return true;
+    }
+  } catch (error) {
+    console.error("Auto deliver failed:", error.message);
+  }
+  return false;
+}
+
 async function handleLarkWebhook(req, res) {
   const raw = await readBody(req);
   const payload = JSON.parse(raw || '{}');
@@ -892,6 +940,10 @@ async function handleLarkWebhook(req, res) {
     if (action === 'submenu') return send(res, 200, JSON.stringify(larkCardCallbackResponse(larkAccountMenu(String(value.group || ''), value.page))));
     if (action === 'request') {
       const item = await parseLarkCardRequest(payload, value);
+      if (item) {
+        const delivered = await attemptAutoDeliver(item);
+        if (delivered) return send(res, 200, JSON.stringify({ toast: { type: 'success', content: 'ระบบได้ส่งรหัสผ่านให้ทางแชตเรียบร้อยแล้ว' } }));
+      }
       if (!item || !isAllowedLarkChat(item.larkChatId)) return send(res, 200, JSON.stringify({ toast: { type: 'error', content: 'ไม่สามารถรับคำขอจากแชตนี้ได้' } }));
       const current = await readRequests();
       if (!current.some((saved) => saved.id === item.id)) {

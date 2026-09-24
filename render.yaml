@@ -24,3 +24,7 @@ services:
         sync: false
       - key: LARK_ALLOWED_CHAT_ID
         sync: false
+      - key: AUTO_DELIVER_BOT_EMAIL
+        sync: false
+      - key: AUTO_DELIVER_BOT_PASSWORD
+        sync: false
