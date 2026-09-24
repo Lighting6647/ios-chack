@@ -770,7 +770,10 @@ async function getLarkUserProfile(openId) {
       headers: { Authorization: `Bearer ${token}` },
     });
     const result = await response.json();
-    if (!response.ok || result.code) return fallback;
+    if (!response.ok || result.code) {
+      console.warn('Lark user profile lookup failed', { status: response.status, code: result.code, message: result.msg });
+      return fallback;
+    }
     const user = result.data?.user || {};
     const profile = {
       name: String(user.name || user.en_name || fallback.name).trim(),
@@ -781,6 +784,21 @@ async function getLarkUserProfile(openId) {
   } catch {
     return fallback;
   }
+}
+
+async function enrichLarkRequestProfiles(requests) {
+  let changed = false;
+  for (const request of requests) {
+    if (request.source !== 'Lark' || !request.larkUserId || request.larkUserId === 'unknown') continue;
+    if (request.name && !/^Lark User\b|^ผู้ใช้ Lark$/i.test(request.name)) continue;
+    const profile = await getLarkUserProfile(request.larkUserId);
+    if (/^Lark User\b|^ผู้ใช้ Lark$/i.test(profile.name)) continue;
+    request.name = profile.name;
+    request.email = profile.email;
+    changed = true;
+  }
+  if (changed) await writeRequests(requests);
+  return requests;
 }
 
 function isValidLarkWebhook(value) {
@@ -1201,7 +1219,8 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && req.url === '/api/requests') {
       if (!requireAdminSession(req, res)) return;
-      return send(res, 200, JSON.stringify({ requests: await readRequests() }));
+      const requests = await enrichLarkRequestProfiles(await readRequests());
+      return send(res, 200, JSON.stringify({ requests }));
     }
     
     if (req.method === 'POST' && req.url === '/api/config/line') {

@@ -559,6 +559,17 @@ test("Lark interactive menu requests and secure delivery work end to end", async
   assert.equal(larkRequest.requestVaultItemId, accountButton.value.item);
   assert.ok(larkRequest.requestAccount, "the selected Vault account should be stored explicitly");
 
+  const storedRequestsPath = path.join(dataDir, "requests.json");
+  const storedRequests = JSON.parse(await fs.readFile(storedRequestsPath, "utf8"));
+  storedRequests[0].name = "Lark User t_user";
+  storedRequests[0].email = "ou_test_user";
+  await fs.writeFile(storedRequestsPath, JSON.stringify(storedRequests));
+  const enrichedRequestList = await fetch(`${baseUrl}/api/requests`, {
+    headers: { cookie: adminCookie },
+  }).then((response) => response.json());
+  assert.equal(enrichedRequestList.requests[0].name, "Fern Lark User");
+  assert.equal(enrichedRequestList.requests[0].email, "fern@example.com");
+
   const deliveryResponse = await fetch(`${baseUrl}/api/lark/deliver`, {
     method: "POST",
     headers: { "content-type": "application/json", cookie: adminCookie },
