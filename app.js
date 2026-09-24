@@ -739,13 +739,13 @@ function renderRequests() {
   const term = $("#requestSearch").value.trim().toLowerCase();
   const status = $("#requestStatusFilter").value;
   const filtered = requests.filter((request) => {
-    const matchesTerm = !term || `${request.name} ${request.email} ${request.system} ${request.reason}`.toLowerCase().includes(term);
+    const matchesTerm = !term || `${request.name} ${request.email} ${request.system} ${request.requestAccount || ""} ${request.reason}`.toLowerCase().includes(term);
     return matchesTerm && (status === "all" || request.status === status);
   });
   $("#requestTableBody").innerHTML = filtered.map((request) => `
     <tr>
       <td><div class="user-cell"><span class="avatar">${escapeHtml(initials(request.name))}</span><div><strong>${escapeHtml(request.name)}${request.urgent ? '<em class="urgent-dot">ด่วน</em>' : ""}</strong><small>${escapeHtml(request.email)}</small></div></div></td>
-      <td><strong>${escapeHtml(request.system)}</strong><small class="vault-updated">${request.source === "Lark" ? "จาก Lark" : `จาก ${escapeHtml(request.source || "รายการเดิม")}`}</small></td>
+      <td><strong>${escapeHtml(request.system)}</strong><small class="vault-updated">${request.source === "Lark" ? `บัญชีที่ขอ: ${escapeHtml(request.requestAccount || "ยังไม่ระบุ")} · จาก Lark` : `บัญชีที่ขอ: ${escapeHtml(request.requestAccount || "ยังไม่ระบุ")} · จาก ${escapeHtml(request.source || "รายการเดิม")}`}</small></td>
       <td class="reason-cell">${escapeHtml(request.reason)}</td>
       <td>${formatDate(request.date)}</td>
       <td><span class="status ${request.status}">${requestLabels[request.status] || request.status}</span></td>
@@ -1177,8 +1177,8 @@ async function pullLineRequests() {
       renderDashboard();
       if (linePollReady) {
         const latest = incoming[0];
-        toast("มีคำขอใหม่จาก Lark", `${latest.system} · ${latest.reason}`);
-        if ("Notification" in window && Notification.permission === "granted") new Notification("Passly: คำขอ Password ใหม่", { body: `${latest.system} — ${latest.reason}`, tag: latest.id });
+        toast("มีคำขอใหม่จาก Lark", `${latest.name} · ${latest.system} · ${latest.requestAccount || "ไม่ระบุบัญชี"}`);
+        if ("Notification" in window && Notification.permission === "granted") new Notification("Passly: คำขอ Password ใหม่", { body: `${latest.name} — ${latest.system} — ${latest.requestAccount || "ไม่ระบุบัญชี"}`, tag: latest.id });
       }
     }
     linePollReady = true;

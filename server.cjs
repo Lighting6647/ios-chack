@@ -739,6 +739,7 @@ function larkAccountMenu(groupKey, page = 1) {
 }
 
 let larkTokenCache = { token: '', expiresAt: 0 };
+const larkUserCache = new Map();
 
 async function getLarkTenantToken() {
   const { appId, appSecret } = getLarkConfig();
@@ -752,6 +753,34 @@ async function getLarkTenantToken() {
   if (!response.ok || result.code) throw new Error(result.msg || 'ขอ Lark access token ไม่สำเร็จ');
   larkTokenCache = { token: result.tenant_access_token, expiresAt: Date.now() + Math.max(60, Number(result.expire) || 7200) * 1000 };
   return larkTokenCache.token;
+}
+
+async function getLarkUserProfile(openId) {
+  const normalizedOpenId = String(openId || '').trim();
+  const fallback = {
+    name: normalizedOpenId && normalizedOpenId !== 'unknown' ? `Lark User ${normalizedOpenId.slice(-6)}` : 'ผู้ใช้ Lark',
+    email: normalizedOpenId && normalizedOpenId !== 'unknown' ? normalizedOpenId : 'Lark',
+  };
+  if (!normalizedOpenId || normalizedOpenId === 'unknown') return fallback;
+  const cached = larkUserCache.get(normalizedOpenId);
+  if (cached && cached.expiresAt > Date.now()) return cached.profile;
+  try {
+    const token = await getLarkTenantToken();
+    const response = await fetch(`${larkApiBaseUrl}/open-apis/contact/v3/users/${encodeURIComponent(normalizedOpenId)}?user_id_type=open_id`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const result = await response.json();
+    if (!response.ok || result.code) return fallback;
+    const user = result.data?.user || {};
+    const profile = {
+      name: String(user.name || user.en_name || fallback.name).trim(),
+      email: String(user.enterprise_email || user.email || fallback.email).trim(),
+    };
+    larkUserCache.set(normalizedOpenId, { profile, expiresAt: Date.now() + 10 * 60_000 });
+    return profile;
+  } catch {
+    return fallback;
+  }
 }
 
 function isValidLarkWebhook(value) {
@@ -797,15 +826,16 @@ function verifyLarkPayload(payload) {
   return !token || payload.header?.token === token || payload.token === token;
 }
 
-function parseLarkCardRequest(payload, value) {
+async function parseLarkCardRequest(payload, value) {
   const catalogItem = value.item ? getLarkConfig().menuCatalog.find((item) => item.id === value.item) : null;
   const system = catalogItem?.system || String(value.system || '').trim();
   if (!system) return null;
-  const openId = payload.event?.operator?.operator_id?.open_id || payload.event?.sender?.sender_id?.open_id || 'unknown';
+  const openId = payload.event?.operator?.open_id || payload.event?.operator?.operator_id?.open_id || payload.event?.sender?.sender_id?.open_id || 'unknown';
+  const profile = await getLarkUserProfile(openId);
   const chatId = payload.event?.context?.open_chat_id || payload.event?.message?.chat_id || getLarkConfig().allowedChatId;
   const eventId = payload.header?.event_id || crypto.randomUUID();
   return {
-    id: `lark-${eventId}`, name: `Lark User ${String(openId).slice(-6)}`, email: openId, system,
+    id: `lark-${eventId}`, name: profile.name, email: profile.email, system,
     reason: 'สมาชิกกดขอ Password จากเมนูในกลุ่ม Lark', date: new Date().toISOString().slice(0, 10),
     receivedAt: new Date().toISOString(), status: 'pending', urgent: false, source: 'Lark',
     larkUserId: openId, larkChatId: chatId, larkChatName: getLarkConfig().chatName,
@@ -830,7 +860,7 @@ async function handleLarkWebhook(req, res) {
     if (action === 'menu') return send(res, 200, JSON.stringify(larkCardCallbackResponse(larkRequestMenu(value.page))));
     if (action === 'submenu') return send(res, 200, JSON.stringify(larkCardCallbackResponse(larkAccountMenu(String(value.group || ''), value.page))));
     if (action === 'request') {
-      const item = parseLarkCardRequest(payload, value);
+      const item = await parseLarkCardRequest(payload, value);
       if (!item || !isAllowedLarkChat(item.larkChatId)) return send(res, 200, JSON.stringify({ toast: { type: 'error', content: 'ไม่สามารถรับคำขอจากแชตนี้ได้' } }));
       const current = await readRequests();
       if (!current.some((saved) => saved.id === item.id)) {
@@ -859,13 +889,15 @@ async function handleLarkWebhook(req, res) {
           const [system, ...reasonParts] = clean.split(/\n|เหตุผล\s*[:：]?/i);
           const reason = reasonParts.join(' ').trim() || text;
           const openId = payload.event.sender?.sender_id?.open_id || 'unknown';
+          const profile = await getLarkUserProfile(openId);
           const createTime = Number(payload.event.message.create_time) || Date.now();
           
           const item = {
             id: `lark-${payload.header.event_id}`,
-            name: `Lark User ${String(openId).slice(-6)}`,
-            email: openId,
+            name: profile.name,
+            email: profile.email,
             system: system || 'ไม่ระบุระบบ',
+            requestAccount: system || null,
             reason,
             date: new Date(createTime).toISOString().slice(0, 10),
             receivedAt: new Date(createTime).toISOString(),

@@ -402,6 +402,10 @@ test("Lark interactive menu requests and secure delivery work end to end", async
       res.end(JSON.stringify({ code: 0, tenant_access_token: "test-lark-token", expire: 7200 }));
       return;
     }
+    if (req.url === "/open-apis/contact/v3/users/ou_test_user?user_id_type=open_id") {
+      res.end(JSON.stringify({ code: 0, data: { user: { name: "Fern Lark User", email: "fern@example.com" } } }));
+      return;
+    }
     res.end(JSON.stringify({ code: 0, data: {} }));
   });
   larkApi.listen(0, "127.0.0.1");
@@ -515,7 +519,7 @@ test("Lark interactive menu requests and secure delivery work end to end", async
     body: JSON.stringify({
       header: { event_id: "lark-submenu-1", event_type: "card.action.trigger", token: "test-verification-token" },
       event: {
-        operator: { operator_id: { open_id: "ou_test_user" } },
+        operator: { open_id: "ou_test_user" },
         context: { open_chat_id: "oc_test_chat" },
         action: { value: submenuButton.value },
       },
@@ -535,7 +539,7 @@ test("Lark interactive menu requests and secure delivery work end to end", async
     body: JSON.stringify({
       header: { event_id: "lark-request-1", event_type: "card.action.trigger", token: "test-verification-token" },
       event: {
-        operator: { operator_id: { open_id: "ou_test_user" } },
+        operator: { open_id: "ou_test_user" },
         context: { open_chat_id: "oc_test_chat" },
         action: { value: accountButton.value },
       },
@@ -549,8 +553,11 @@ test("Lark interactive menu requests and secure delivery work end to end", async
   }).then((response) => response.json());
   const larkRequest = requestList.requests[0];
   assert.equal(larkRequest.source, "Lark");
+  assert.equal(larkRequest.name, "Fern Lark User");
+  assert.equal(larkRequest.email, "fern@example.com");
   assert.equal(larkRequest.larkChatId, "oc_test_chat");
   assert.equal(larkRequest.requestVaultItemId, accountButton.value.item);
+  assert.ok(larkRequest.requestAccount, "the selected Vault account should be stored explicitly");
 
   const deliveryResponse = await fetch(`${baseUrl}/api/lark/deliver`, {
     method: "POST",
