@@ -1169,9 +1169,13 @@ async function pullLineRequests() {
     }
     const payload = await response.json();
     const known = new Set(requests.map((request) => request.id));
-    const incoming = (payload.requests || []).filter((request) => !known.has(request.id));
-    if (incoming.length) {
-      requests = [...incoming, ...requests];
+    const serverRequests = payload.requests || [];
+    const incoming = serverRequests.filter((request) => !known.has(request.id));
+    const serverById = new Map(serverRequests.map((request) => [request.id, request]));
+    const syncedRequests = requests.map((request) => serverById.has(request.id) ? { ...request, ...serverById.get(request.id) } : request);
+    const hasUpdates = syncedRequests.some((request, index) => JSON.stringify(request) !== JSON.stringify(requests[index]));
+    if (incoming.length || hasUpdates) {
+      requests = [...incoming, ...syncedRequests];
       saveRequests();
       renderRequests();
       renderDashboard();
